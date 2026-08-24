@@ -66,9 +66,10 @@ Ensure the directories exist and contain the required files before running the p
 
 # Installation
 
-- `stitch.exe`: Standalone executable generated with PyInstaller:
-  - Build command example: `pyinstaller --onefile stitch.py`
+- `stitch.exe`: Standalone executable generated with PyInstaller
+- `stitch.cmd`: Batch script to create `stitch.exe` with PyInstaller
 - `readme.md`: This file.
+- `stitch.zip`: Zip archive containing the binary in a work directory with folder for input and output and also *.ini file
 - `src/stitch.py`: Python source code.
 - `src/lfstitcher.py`: Python source code.
 - `stitch.ini`: Configuration file (example).

@@ -83,12 +83,12 @@ In order to create stitch.exe from the source files, execute `stitch.cmd`. The c
 Capture overlapping images covering the subject. Keep the following as consistent as possible:
 
 - Same focus plane (small deviations tolerated)
-- Same exposure (automatic correction applied to some degree)
-- Same color balance
+- Same exposure (automatic correction turned off!!)
+- Same color balance (automatic correction turned off!!)
 
 ## Create Stitched Image
 
-1. Remove any existing images in `img` and `refimg` if present.
+1. Remove any existing images in `img` and `refimg` if present (execute del.cmd)
 2. Copy captured images into `img`.
 3. Run `stitch.exe`.
 

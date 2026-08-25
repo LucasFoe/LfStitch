@@ -66,19 +66,35 @@ Ensure the directories exist and contain the required files before running the p
 
 # Installation
 
-- `stitch.exe`: Standalone executable generated with PyInstaller
-- `stitch.cmd`: Batch script to create `stitch.exe` with PyInstaller
-- `readme.md`: This file.
-- `stitch.zip`: Zip archive containing the binary in a work directory with folder for input and output and also *.ini file
-- `src/stitch.py`: Python source code.
-- `src/lfstitcher.py`: Python source code.
-- `stitch.ini`: Configuration file (example).
+## Windows (x64) - Prebuilt Executable
+If using the prebuilt package or `stitch.zip`:
+1. Extract `stitch.zip` (or locate `dist/stitch.exe`).
+2. Ensure `stitch.ini` and the input folder `img/` are in the working directory.
 
-In order to create stitch.exe from the source files, execute `stitch.cmd`. The created `stitch.exe` is located in `dist/stitch.exe`.
+## Windows (x64) - Building from Source
+To build `stitch.exe` from the source code:
+1. Ensure Python 3 (x64) is installed.
+2. Run `stitch.cmd` in the project root directory.
+3. The generated executable will be placed in `dist/stitch.exe`.
 
+## Other Platforms (Linux / macOS)
+Python source code is cross-platform, but the prebuilt `stitch.exe` binary runs only on Windows (x64). 
+
+For other operating systems:
+1. Ensure Python 3.8+ is installed.
+2. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. Run or package the application:
+   - **Run directly**: `python src/stitch.py`
+   - **Build a native executable**: Run PyInstaller on the target operating system:
+     ```bash
+     pyinstaller --onefile --name stitch src/stitch.py
+     ```
 # Usage
 
-## Capture Input Images
+## Capture Input Images~~
 
 Capture overlapping images covering the subject. Keep the following as consistent as possible:
 

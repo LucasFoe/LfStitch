@@ -33,6 +33,8 @@ try_use_gpu = True
 confidence_threshold = 0.5
 output = output
 fixborder = True
+flatten_background = True
+flatten_kernel_size = 61
 detector = sift
 ```
 
@@ -47,6 +49,8 @@ detector = sift
 | `try_use_gpu` | boolean | `True` | Whether to attempt CUDA/GPU acceleration when available in OpenCV. |
 | `final_megapix` | float | `5` | Resolution limit (in megapixels) for the final stitched image. |
 | `fixborder` | boolean | `True` | Enables post-processing to fix and blend unmapped black borders. |
+| `flatten_background` | boolean | `True` | Flat-field / background correction to eliminate illumination gradients and vignetting. |
+| `flatten_kernel_size` | integer | `61` | Window size (pixels) for background estimation filter. |
 | `detector` | string | `sift` | Feature detector algorithm (`sift`, `orb`, etc.). |
 
 ---

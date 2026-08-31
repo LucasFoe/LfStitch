@@ -165,7 +165,9 @@ def main():
         'confidence_threshold': 0.5,
         'output': 'output',
         'fixborder': True,
-        'detector': 'sift'
+        'detector': 'sift',
+        'flatten_background': True,
+        'flatten_kernel_size': 61
     }
 
     # Get values from config file or use defaults
@@ -181,6 +183,8 @@ def main():
     outfile = config.get('OPTIONS', 'output', fallback=default_options['output'])
     fixborder = config.getboolean('OPTIONS', 'fixborder', fallback=default_options['fixborder'])
     detector_name = config.get('OPTIONS', 'detector', fallback=default_options['detector'])
+    flatten_background = config.getboolean('OPTIONS', 'flatten_background', fallback=default_options['flatten_background'])
+    flatten_kernel_size = config.getint('OPTIONS', 'flatten_kernel_size', fallback=default_options['flatten_kernel_size'])
 
     # Log the option values
     logger.info("Option img_dir: %s", img_dir)
@@ -191,6 +195,8 @@ def main():
     logger.info("Option output: %s", outfile)
     logger.info("Option fixborder: %s", fixborder)
     logger.info("Option detector: %s", detector_name)
+    logger.info("Option flatten_background: %s", flatten_background)
+    logger.info("Option flatten_kernel_size: %d", flatten_kernel_size)
 
     logger.info("Input Directory: %s", os.path.abspath(img_dir))
     filelist = [os.path.join(img_dir, f) for f in sorted(os.listdir(img_dir))]
@@ -210,6 +216,8 @@ def main():
         blender_type="multiband",
         exposure_compensation=True,
         equalize=True,
+        flatten_background=flatten_background,
+        flatten_kernel_size=flatten_kernel_size,
         num_bands=5
     )
     output = stitcher.stitch(filelist)

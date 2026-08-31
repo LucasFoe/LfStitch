@@ -31,9 +31,6 @@ def calculate_mean_color(output, border, black_thresh=8, ring=10, lum_clip=(5, 9
     - ring: number of pixels to look around the unmapped area (dilation radius).
     - lum_clip: percentile range for luminance-based outlier rejection.
     """
-    import numpy as np
-    import cv2
-
     height, width, _ = output.shape
     img_f = output.astype(np.float32)
 
@@ -152,7 +149,6 @@ def fix_border(output):
     return outputfixed_uint8
 
 
-# Read duration from gengif.ini
 def main():
     config = configparser.ConfigParser()
 
@@ -160,29 +156,15 @@ def main():
     logger.info("Config file full path: %s", ini_path)
     config.read(ini_path)
 
-    """
-    Content of stitch.ini
-    [OPTIONS]
-    img_dir = './img'
-    out_dir = './result'
-    final_megapix = 5
-    try_use_gpu = True
-    confidence_threshold=0.5
-    final_megapix = 5
-    output = output
-    fixborder = True
-    detector = sift
-    """
-
     # Set default values
     default_options = {
         'img_dir': './img',
         'out_dir': './result',
-        'final_megapix': 5,
+        'final_megapix': 5.0,
         'try_use_gpu': True,
         'confidence_threshold': 0.5,
         'output': 'output',
-        'fixborder': False,
+        'fixborder': True,
         'detector': 'sift'
     }
 
@@ -207,6 +189,7 @@ def main():
     logger.info("Option try_use_gpu: %s", try_use_gpu)
     logger.info("Option confidence_threshold: %f", confidence_threshold)
     logger.info("Option output: %s", outfile)
+    logger.info("Option fixborder: %s", fixborder)
     logger.info("Option detector: %s", detector_name)
 
     logger.info("Input Directory: %s", os.path.abspath(img_dir))
@@ -235,6 +218,18 @@ def main():
         logger.error("Stitcher returned no output (None). Exiting.")
         raise RuntimeError("Stitching failed, no output image produced")
 
+    # Resize output image if final_megapix is specified (> 0)
+    if final_megapix > 0:
+        h, w = output.shape[:2]
+        current_megapix = (w * h) / 1e6
+        if current_megapix > final_megapix:
+            scale = (final_megapix / current_megapix) ** 0.5
+            new_w = max(1, int(round(w * scale)))
+            new_h = max(1, int(round(h * scale)))
+            logger.info("Scaling final image from %.2f MP (%dx%d) to %.2f MP (%dx%d)",
+                        current_megapix, w, h, final_megapix, new_w, new_h)
+            output = cv2.resize(output, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
     # Ensure output directory exists
     os.makedirs(out_dir, exist_ok=True)
 
@@ -246,15 +241,16 @@ def main():
     cv2.imwrite(out_path, output)
     logger.info("Output file: %s", out_path)
 
-    # Always attempt to produce the fixed version; if it fails, write the original image as fixed.
-    try:
-        output_fixed = fix_border(output)
-        cv2.imwrite(fixed_out_path, output_fixed)
-        logger.info("Fixed output file: %s", fixed_out_path)
-    except Exception:
-        logger.exception("Failed to create fixed output, writing original as fixed")
-        cv2.imwrite(fixed_out_path, output)
-        logger.info("Fixed output file (fallback to original): %s", fixed_out_path)
+    # Conditionally perform border-fixing post-processing
+    if fixborder:
+        try:
+            output_fixed = fix_border(output)
+            cv2.imwrite(fixed_out_path, output_fixed)
+            logger.info("Fixed output file: %s", fixed_out_path)
+        except Exception:
+            logger.exception("Failed to create fixed output, writing original as fixed")
+            cv2.imwrite(fixed_out_path, output)
+            logger.info("Fixed output file (fallback to original): %s", fixed_out_path)
 
 
 if __name__ == '__main__':

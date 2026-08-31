@@ -1,17 +1,30 @@
-# Stitch: Python Program for Image Stitching
+# LfStitch: Python Tool for Image Stitching & Panoramas
 
-Stitch is a Python program for image stitching. The program uses default values for most options. 
+[![GitHub Repository](https://img.shields.io/badge/GitHub-LucasFoe%2FLfStitch-blue?logo=github)](https://github.com/LucasFoe/LfStitch)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/LucasFoe/LfStitch/blob/main/LICENSE)
+[![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://www.python.org/)
 
-Only the following options are configurable:
-- `confidence_threshold`: Confidence level for selecting image matches. Default: `0.5`.
-- `try_use_gpu`: Boolean to indicate if GPU should be used. Default: `True`.
-- `final_megapix`: Resolution for final stitched image (megapixels). Default: `5`.
-- `crop`: Boolean to indicate if cropping should be performed. Default: `False` (not changeable).
-- `warper_type`: Type of image warper. Default: `plane` (not changeable).
-- `detector`: Feature detector type. Default: `sift` (not changeable).
+**LfStitch** is a Python tool designed for automated image stitching and panorama generation using OpenCV. It provides intelligent feature matching, homography estimation, multiband blending, exposure compensation, and border-filling post-processing to remove unmapped black borders.
 
-To change any of these options, add them to the INI file `stitch.ini`:
-```
+Repository URL: [https://github.com/LucasFoe/LfStitch](https://github.com/LucasFoe/LfStitch)
+
+---
+
+## Features
+
+- **Automated Feature Detection & Matching**: Powered by SIFT/ORB with robust RANSAC homography estimation.
+- **Multiband Blending & Exposure Compensation**: Seamless transitions and uniform lighting between overlapping frames.
+- **Intelligent Border Post-Processing**: Automatically estimates mean border color and fills unmapped/black border pixels (`outputfixed.jpg`).
+- **Flexible Configuration**: Highly configurable via `stitch.ini`.
+- **Cross-Platform**: Run with Python on Windows, macOS, and Linux, or as a standalone Windows executable (`stitch.exe`).
+
+---
+
+## Configuration (`stitch.ini`)
+
+LfStitch reads its settings from `stitch.ini` in the working directory. Sensible defaults are used if options are omitted.
+
+```ini
 [OPTIONS]
 img_dir = ./img
 out_dir = ./result
@@ -19,98 +32,108 @@ final_megapix = 5
 try_use_gpu = True
 confidence_threshold = 0.5
 output = output
+fixborder = True
+detector = sift
 ```
 
-# Precondition for Each Program Run
+### Configurable Options
 
-## Directory Structure
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `img_dir` | string | `./img` | Path to the directory containing input images. |
+| `out_dir` | string | `./result` | Path to the directory where stitched results will be saved. |
+| `output` | string | `output` | Base filename for the output images (`output.jpg` and `outputfixed.jpg`). |
+| `confidence_threshold` | float | `0.5` | Threshold for selecting image matches (determines minimum inliers). |
+| `try_use_gpu` | boolean | `True` | Whether to attempt CUDA/GPU acceleration when available in OpenCV. |
+| `final_megapix` | float | `5` | Resolution limit (in megapixels) for the final stitched image. |
+| `fixborder` | boolean | `True` | Enables post-processing to fix and blend unmapped black borders. |
+| `detector` | string | `sift` | Feature detector algorithm (`sift`, `orb`, etc.). |
 
-1. **Input Directory (`img_dir`, change default in `stitch.ini`)**
-   - Path: `./img`
-   - Content: JPEG files (`.jpg`) to be stitched into a panorama.
+---
 
-2. **Output Directory (`out_dir` and `output`, change default in `stitch.ini`)**
-   - Path: `./result`
-   - Filenames produced: `output.jpg` (stitched image before postprocessing) and `outputfixed.jpg` (stitched image after border-fix postprocessing).
+## Directory Structure & Preconditions
 
-Ensure the directories exist and contain the required files before running the program.
+Before executing the program, prepare the directory structure according to `stitch.ini`:
 
-# Functionality of the Program
+1. **Input Directory (`img_dir`)**:
+   - Default: `./img`
+   - Place all overlapping source images (e.g. `.jpg`, `.jpeg`, `.png`) to be stitched together.
+2. **Output Directory (`out_dir`)**:
+   - Default: `./result`
+   - Generated files:
+     - `output.jpg` – Raw stitched panorama.
+     - `outputfixed.jpg` – Post-processed panorama with border correction applied.
+3. **Log File**:
+   - Execution details are recorded in `stitch.log` (automatically reset if size exceeds 10 MB).
 
-1. **Logging Configuration**
-   - Logs to console and to `stitch.log`.
-   - Removes the log file if it exceeds 10 MB.
+---
 
-2. **Configuration Reading**
-   - Reads options from `stitch.ini` and applies defaults when needed.
+## Installation & Setup
 
-3. **Directory and File Handling**
-   - Converts relative input/output paths to absolute paths and logs them.
-   - Lists input files and logs their full paths.
+### Prerequisites
+- Python 3.8+ (64-bit recommended)
+- `pip` package manager
 
-4. **Image Stitching**
-   - Initializes a `Stitcher` object with configured parameters.
-   - Uses the stitcher to create a panorama and saves the result.
+### 1. Clone the Repository
+```bash
+git clone https://github.com/LucasFoe/LfStitch.git
+cd LfStitch
+```
 
-5. **Post-Processing for Border Removal**
-   - Replaces black border pixels with a mean color sampled from non-black border pixels.
-   - Saves the post-processed image as `outputfixed.jpg`.
+### 2. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
 
-# Libraries Used
+---
 
-- `os` for file and directory operations.
-- `numpy` for numerical operations.
-- `cv2` (OpenCV) for image processing.
-- `logging` for logging messages.
-- `configparser` for reading configuration files.
+## Usage
 
-# Installation
+### Capturing Input Images (Best Practices)
+For optimal stitching quality, capture overlapping images (around 30–50% overlap) covering the scene and keep the following settings fixed:
+- **Consistent focus plane** (manual focus recommended).
+- **Fixed exposure** (turn off automatic exposure / use AE lock).
+- **Fixed white balance / color balance** (turn off automatic white balance).
 
-## Windows (x64) - Prebuilt Executable
-If using the prebuilt package or `stitch.zip`:
-1. Extract `stitch.zip` (or locate `dist/stitch.exe`).
-2. Ensure `stitch.ini` and the input folder `img/` are in the working directory.
+### Running the Stitcher
 
-## Windows (x64) - Building from Source
-To build `stitch.exe` from the source code:
-1. Ensure Python 3 (x64) is installed.
-2. Run `stitch.cmd` in the project root directory.
-3. The generated executable will be placed in `dist/stitch.exe`.
+#### Using Python
+```bash
+python src/stitch.py
+```
 
-## Other Platforms (Linux / macOS)
-Python source code is cross-platform, but the prebuilt `stitch.exe` binary runs only on Windows (x64). 
-
-For other operating systems:
-1. Ensure Python 3.8+ is installed.
-2. Install the required dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Run or package the application:
-   - **Run directly**: `python src/stitch.py`
-   - **Build a native executable**: Run PyInstaller on the target operating system:
-     ```bash
-     pyinstaller --onefile --name stitch src/stitch.py
-     ```
-# Usage
-
-## Capture Input Images~~
-
-Capture overlapping images covering the subject. Keep the following as consistent as possible:
-
-- Same focus plane (small deviations tolerated)
-- Same exposure (automatic correction turned off!!)
-- Same color balance (automatic correction turned off!!)
-
-## Create Stitched Image
-
-1. Remove any existing images in `img` and `refimg` if present (execute del.cmd)
-2. Copy captured images into `img`.
+#### Using Prebuilt Windows Executable
+1. Extract `stitch.zip` or locate `dist/stitch.exe`.
+2. Ensure `stitch.ini` and the input folder `img/` are present in the directory.
 3. Run `stitch.exe`.
 
-Example: Metzgeria furcata (L.) Dumort.  
-![outputfixed](outputfixed.jpg)
+#### Cleaning Temporary Files (Windows)
+To clean previous input and result images before a fresh run:
+```cmd
+scripts\del.cmd
+```
 
-# License
+#### Building Standalone Binary (PyInstaller)
+To package into a single executable binary:
+- **Windows**: Run `stitch.cmd` or:
+  ```cmd
+  pyinstaller stitch.spec
+  ```
+- **Linux / macOS**:
+  ```bash
+  pyinstaller --onefile --name stitch src/stitch.py
+  ```
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+---
+
+## Example Result
+
+**Specimen:** *Metzgeria furcata* (L.) Dumort.
+
+![Stitched Output Fixed](outputfixed.jpg)
+
+---
+
+## License
+
+This project is open-source and licensed under the [MIT License](LICENSE).

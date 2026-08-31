@@ -129,16 +129,10 @@ class FeatureMatcher:
             logger.info("Detector using CUDA: %s", bool(getattr(self, 'using_cuda', False)))
             self._logged_cuda = True
 
-        if img1.ndim == 3 and img2.ndim == 3:
-            gray1 = self._preprocess(img1)
-            gray2 = self._preprocess(img2)
-            kp1, des1 = self.detector.detectAndCompute(gray1, None)
-            kp2, des2 = self.detector.detectAndCompute(gray2, None)
-        else:
-            gray1 = self._preprocess(img1)
-            gray2 = self._preprocess(img2)
-            kp1, des1 = self.detector.detectAndCompute(gray1, None)
-            kp2, des2 = self.detector.detectAndCompute(gray2, None)
+        gray1 = self._preprocess(img1)
+        gray2 = self._preprocess(img2)
+        kp1, des1 = self.detector.detectAndCompute(gray1, None)
+        kp2, des2 = self.detector.detectAndCompute(gray2, None)
 
         if des1 is None or des2 is None or len(kp1) < 4 or len(kp2) < 4:
             return {'success': False, 'H': None, 'inliers': 0, 'matches': [], 'kp1': kp1, 'kp2': kp2, 'mask': None}
@@ -567,10 +561,7 @@ class SimpleStitcher:
         # 4. Force unmapped canvas pixels to black (0,0,0)
         if combined_mask is not None:
             unseen = (combined_mask == 0)
-            if result.ndim == 3:
-                result[unseen] = 0
-            else:
-                result[unseen] = 0
+            result[unseen] = 0
 
         # 5. Final Gradient Smoothing (Optional but helpful for large panoramas)
         # We can apply a very mild blurring to the transitions if needed, 

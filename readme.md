@@ -33,8 +33,6 @@ try_use_gpu = True
 confidence_threshold = 0.5
 output = output
 fixborder = True
-flatten_background = True
-flatten_kernel_size = 61
 detector = sift
 ```
 
@@ -49,31 +47,7 @@ detector = sift
 | `try_use_gpu` | boolean | `True` | Whether to attempt CUDA/GPU acceleration when available in OpenCV. |
 | `final_megapix` | float | `5` | Resolution limit (in megapixels) for the final stitched image. |
 | `fixborder` | boolean | `True` | Enables post-processing to fix and blend unmapped black borders. |
-| `flatten_background` | boolean | `True` | Flat-field / background correction to eliminate illumination gradients and vignetting. |
-| `flatten_kernel_size` | integer | `61` | Window size (pixels) for background estimation filter. |
 | `detector` | string | `sift` | Feature detector algorithm (`sift`, `orb`, etc.). |
-
-### Background Flattening & Flat-Field Correction
-
-Microscopy, macro photography, and scanner image captures frequently exhibit uneven illumination, optical vignetting (darkened corners/edges), and background gradient variations between adjacent tiles.
-
-- **`flatten_background` (`True` / `False`)**:
-  - **What it does**: Enables pseudo flat-field background correction. It estimates the low-frequency illumination profile/envelope per color channel using morphological dilation (a rolling-ball equivalent) followed by Gaussian smoothing, then normalizes each image tile by dividing by this estimated profile.
-  - **Why it matters**: It prevents visible seam lines and tile "checkerboard" artifacts caused by light falloff and edge shading across overlapping images.
-
-- **`flatten_kernel_size` (integer, default: `61`)**:
-  - **What it does**: Defines the structuring element diameter and Gaussian filter kernel size (in pixels) used to estimate the background envelope. Automatically coerced to an odd integer.
-  - **How it works**: A rolling window of this size must be large enough to span across dark foreground specimen structures so they are filtered out during dilation, leaving behind only the smooth background illumination map.
-
-#### Recommendations for `flatten_kernel_size`
-
-| Use Case / Image Characteristic | Recommended Value | Notes |
-| :--- | :--- | :--- |
-| **Standard Microscopy & Brightfield** (Default) | `51` – `81` (Default: `61`) | Optimal for fine specimen structures (cells, spores, thin tissue, thalli) with bright, mostly uniform background. |
-| **Thick / Large Specimen Features** | `101` – `201+` | If specimen features are wide or dense, increase kernel size so the dilation filter bridges across dark objects rather than sampling them as background. |
-| **Fine Details / Small Tile Resolutions** (< 1-2 MP) | `31` – `51` | Smaller images require a smaller window size to preserve subtle global gradients without over-blurring. |
-| **High-Resolution Tiles** (> 10-20 MP) | `101` – `251` | Scale up the kernel size proportionally to the image pixel dimensions so the filter area matches the physical structure scale. |
-| **Complex Non-Microscopy Panoramas** (Landscape/Indoor) | `flatten_background = False` | Disable if the scene contains broad natural brightness variations across real physical objects rather than optical vignetting. |
 
 ---
 

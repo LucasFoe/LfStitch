@@ -199,7 +199,7 @@ class SimpleStitcher:
     def __init__(self, detector='sift', ratio=0.75, ransac_thresh=4.0, min_inliers=30,
                  warper_type='plane', crop=True, try_use_gpu=False, skip_reorder=True,
                  blender_type='multiband', exposure_compensation=False, num_bands=5,
-                 equalize=False, flatten_background=True, flatten_kernel_size=61):
+                 equalize=False):
         self.matcher = FeatureMatcher(detector=detector, ratio=ratio, ransac_thresh=ransac_thresh,
                                       min_inliers=min_inliers, try_use_gpu=try_use_gpu)
         self.warper_type = (warper_type or 'plane').lower()
@@ -209,8 +209,6 @@ class SimpleStitcher:
         self.exposure_compensation = bool(exposure_compensation)
         self.num_bands = int(num_bands)
         self.equalize = bool(equalize)  # boolean flag for equalization
-        self.flatten_background = bool(flatten_background)
-        self.flatten_kernel_size = int(flatten_kernel_size)
 
     @staticmethod
     def _cylindrical_warp(img, f=None):
@@ -629,48 +627,6 @@ class SimpleStitcher:
 
         return img[y2:y_end, x2:x_end]
 
-    @staticmethod
-    def flatten_flatfield_background(imgs, kernel_size=61, target_intensity=220):
-        """
-        Estimate background shading / flat-field gradient per image via morphological
-        dilation (rolling-ball equivalent) and Gaussian smoothing, then divide to
-        eliminate vignetting and illumination gradients.
-        """
-        flattened = []
-        # Ensure odd kernel size
-        ksize = int(kernel_size)
-        if ksize % 2 == 0:
-            ksize += 1
-        morph_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ksize, ksize))
-
-        for img in imgs:
-            if img is None:
-                flattened.append(img)
-                continue
-
-            # Work in float32
-            img_f = img.astype(np.float32)
-            bg_channels = []
-
-            # Estimate low-frequency background envelope for each color channel
-            for c in range(3):
-                ch = img_f[:, :, c]
-                # Morphological dilation removes darker foreground/specimen structures
-                dilated = cv2.dilate(ch, morph_kernel)
-                # Large Gaussian blur produces smooth illumination profile
-                bg = cv2.GaussianBlur(dilated, (ksize, ksize), 0)
-                bg_channels.append(bg)
-
-            bg_map = cv2.merge(bg_channels)
-
-            # Division / Flat-field normalization
-            bg_safe = np.maximum(bg_map, 1.0)
-            corrected = (img_f / bg_safe) * float(target_intensity)
-            corrected = np.clip(corrected, 0, 255).astype(np.uint8)
-            flattened.append(corrected)
-
-        return flattened
-
     def stitch(self, filelist, img_loader=lambda p: cv2.imread(p, cv2.IMREAD_COLOR), assume_same_scale=True):
         """Enhanced stitching with multi-band blending and exposure compensation."""
         if not filelist:
@@ -681,11 +637,6 @@ class SimpleStitcher:
 
         # log matcher GPU usage at runtime
         logger.info("Matcher using CUDA: %s", bool(getattr(self.matcher, 'using_cuda', False)))
-
-        # apply flat-field / background flattening if enabled
-        if self.flatten_background:
-            imgs = self.flatten_flatfield_background(imgs, kernel_size=self.flatten_kernel_size)
-            logger.info("Applied background flattening (flat-field correction, kernel=%d).", self.flatten_kernel_size)
 
         # apply optional pre-stitch equalization before matching
         if self.equalize:

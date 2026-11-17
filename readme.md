@@ -18,8 +18,11 @@ LfStitch executes a structured, multi-phase pipeline where each step is applied 
 flowchart TD
     A["Input Image Tiles (img_dir)"] --> B{"Pre-Stitch:<br>vignette_correction?"}
     B -- True --> C["Radial Vignette Correction (per tile)"]
-    B -- False --> D["Feature Matching & Homography (SIFT/ORB)"]
-    C --> D
+    B -- False --> S{"sensor_correction?"}
+    C --> S
+    S -- True --> S1["Stationary Sensor & Dust Correction<br>(flat-field + dust inpainting)"]
+    S -- False --> D["Feature Matching & Homography (SIFT/ORB)"]
+    S1 --> D
     D --> E["Exposure Compensation & Multi-Band Blending (Merge)"]
     E --> F{"fixborder?"}
     F -- True --> F1["fix_border() directly after merge<br>(identifies pure 0,0,0 unmapped areas)"]
@@ -46,6 +49,7 @@ flowchart TD
    * **`vignette_correction`**: Optical lens vignetting (radial light fall-off) is concentric to the lens center of *each individual camera tile*. Correcting this *before* matching and blending prevents darker seams and circular tile patterns across the mosaic.
 
 2. **Phase 2: Core Stitching (`SimpleStitcher`)**
+   * **Stationary Sensor & Dust Correction (`sensor_correction = True`)**: When all input tiles are captured with the same microscope and camera sensor while the specimen moves, `SimpleStitcher.correct_sensor_artifacts()` estimates the stationary background across the frame stack (after per-frame exposure normalization) to remove uneven illumination, color shading, semi-transparent smudges, and localized opaque dust spots *before* feature matching.
    * **Background Equalization & Feature Matching**: SIFT or ORB detects feature keypoints and matches overlapping frames via RANSAC.
    * **Exposure Compensation**: Multiplicative gain estimation harmonizes exposure variations between tiles.
    * **Multi-Band Pyramid Blending**: Blends overlapping regions across spatial frequency bands to avoid visible seams.
@@ -96,6 +100,7 @@ correct_gradient = True
 bg_white_balance = False
 defringe = False
 vignette_correction = False
+sensor_correction = False
 local_contrast = False
 denoise = False
 ```
@@ -116,6 +121,7 @@ denoise = False
 | `bg_white_balance` | boolean | `False` | Neutralizes microscope lamp color cast on the background. |
 | `defringe` | boolean | `False` | Suppresses chromatic aberration color fringing on high-contrast edges. |
 | `vignette_correction` | boolean | `False` | Corrects radial light fall-off (vignetting) on input tiles before stitching. |
+| `sensor_correction` | boolean | `False` | Estimates and removes stationary sensor/optics artifacts (uneven illumination, shading, smudges, and localized dust spots) across shifted frames before matching (requires at least 4 same-sized frames). |
 | `local_contrast` | boolean | `False` | Enhances micro-contrast and fine cellular details via CLAHE in LAB space. |
 | `denoise` | boolean | `False` | Applies edge-preserving bilateral denoising to reduce sensor noise. |
 

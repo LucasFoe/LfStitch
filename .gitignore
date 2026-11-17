@@ -49,3 +49,6 @@ output.jpg
 .vscode/
 *.swp
 *.swo
+
+# Excluded due to GitHub push protection false positive on binary TIFF bytes
+testdata/img5/Euromex_12.tif

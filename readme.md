@@ -50,6 +50,7 @@ flowchart TD
 
 2. **Phase 2: Core Stitching (`SimpleStitcher`)**
    * **Stationary Artifact Correction (Automatic via `w1.*`, `w2.*`, `w3.*`)**: If shifted blank/near-empty reference frames named `w1.*`, `w2.*`, `w3.*` (e.g., `w1.tif`, `w2.tif`, `w3.tif`) exist in `img_dir`, they are automatically excluded from stitching and passed to `SimpleStitcher.correct_stationary_artifacts()` to compute the stationary background via per-pixel median (rejecting stray slide particles) and remove uneven illumination, vignetting, color shading, smudges, and localized dust *before* feature matching. If no `w*.*` reference frames are present, this step is skipped.
+     * *Reusing `w1`, `w2`, `w3` across projects:* The same reference frames can be copied into multiple `img_dir` folders as long as the camera (same resolution, not rotated/remounted) and optical setup (same objective lens, condenser/aperture, and illumination alignment) remain unchanged; minor brightness/exposure differences are handled automatically. Retake them if you change magnification, adjust condenser/lamp settings, rotate/remount the camera, or notice new sensor/optics dust.
    * **Background Equalization & Feature Matching**: SIFT or ORB detects feature keypoints and matches overlapping frames via RANSAC.
    * **Exposure Compensation**: Multiplicative gain estimation harmonizes exposure variations between tiles.
    * **Multi-Band Pyramid Blending**: Blends overlapping regions across spatial frequency bands to avoid visible seams.

@@ -480,6 +480,10 @@ def main():
         num_bands=5
     )
     # Pre-stitching corrections (Radial vignette correction)
+    if vignette_correction and len(ref_filelist) >= 2:
+        logger.info("Skipping vignette_correction because w* reference frames already capture lens vignetting.")
+        vignette_correction = False
+
     if vignette_correction:
         imgs = [cv2.imread(f, cv2.IMREAD_COLOR) for f in filelist]
         if any(im is None for im in imgs):
@@ -519,7 +523,9 @@ def main():
     poly2d_fixed = None
     poly3d_fixed = None
 
-    if correct_gradient:
+    if correct_gradient and len(ref_filelist) >= 2:
+        logger.info("Skipping correct_gradient because background correction was performed with w* reference frames.")
+    elif correct_gradient:
         try:
             logger.info("Performing illumination gradient corrections...")
             rgb_div = correct_illumination_rgb_div(output)
@@ -608,7 +614,9 @@ def main():
     gradient_files = [rgb_div_path, poly2d_path, poly3d_path]
     fixed_gradient_files = [rgb_div_fixed_path, poly2d_fixed_path, poly3d_fixed_path]
 
-    if correct_gradient:
+    if correct_gradient and len(ref_filelist) >= 2:
+        logger.info("Skipping correct_gradient because background correction was performed with w* reference frames.")
+    elif correct_gradient:
         if rgb_div is not None:
             cv2.imwrite(rgb_div_path, rgb_div)
             logger.info("Gradient-corrected output (RGB division): %s", rgb_div_path)

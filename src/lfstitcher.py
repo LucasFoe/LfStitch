@@ -199,7 +199,7 @@ class SimpleStitcher:
     def __init__(self, detector='sift', ratio=0.75, ransac_thresh=4.0, min_inliers=30,
                  warper_type='plane', crop=True, try_use_gpu=False, skip_reorder=True,
                  blender_type='multiband', exposure_compensation=False, num_bands=5,
-                 equalize=False):
+                 equalize=False, sensor_correction=False):
         self.matcher = FeatureMatcher(detector=detector, ratio=ratio, ransac_thresh=ransac_thresh,
                                       min_inliers=min_inliers, try_use_gpu=try_use_gpu)
         self.warper_type = (warper_type or 'plane').lower()
@@ -209,6 +209,7 @@ class SimpleStitcher:
         self.exposure_compensation = bool(exposure_compensation)
         self.num_bands = int(num_bands)
         self.equalize = bool(equalize)  # boolean flag for equalization
+        self.sensor_correction = bool(sensor_correction)
 
     @staticmethod
     def _cylindrical_warp(img, f=None):
@@ -235,6 +236,101 @@ class SimpleStitcher:
         mask = cv2.remap(np.ones((h, w), dtype=np.uint8), map_x, map_y, interpolation=cv2.INTER_NEAREST,
                          borderMode=cv2.BORDER_CONSTANT)
         return warped, mask
+
+    @staticmethod
+    def _detect_stationary_dust_mask(bg_bgr, dust_ratio_thresh=0.80, max_dust_area_ratio=0.005):
+        """
+        Detect small, localized stationary dark spots (e.g. sensor dust) from
+        the estimated stationary background image. Large dark regions are ignored
+        so persistent specimen overlap is not mistaken for dust.
+        """
+        bg_gray = bg_bgr.mean(axis=2).astype(np.float32)
+        bg_smooth = cv2.GaussianBlur(bg_gray, (0, 0), sigmaX=25)
+        local_ratio = bg_gray / np.maximum(bg_smooth, 1.0)
+        candidates = (local_ratio < dust_ratio_thresh).astype(np.uint8)
+
+        h, w = bg_gray.shape
+        max_area = max(4, int(h * w * max_dust_area_ratio))
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(candidates, connectivity=8)
+
+        dust_mask = np.zeros((h, w), dtype=np.uint8)
+        for label_idx in range(1, num_labels):
+            area = int(stats[label_idx, cv2.CC_STAT_AREA])
+            if 2 <= area <= max_area:
+                dust_mask[labels == label_idx] = 255
+
+        if dust_mask.any():
+            kernel = np.ones((3, 3), dtype=np.uint8)
+            dust_mask = cv2.dilate(dust_mask, kernel, iterations=1)
+        return dust_mask
+
+    @classmethod
+    def correct_sensor_artifacts(cls, images, percentile=85, min_frames=4,
+                                 dust_ratio_thresh=0.80, max_dust_area_ratio=0.005,
+                                 gain_min=0.5, gain_max=2.0):
+        """
+        Estimate and remove stationary sensor/optics artifacts (uneven illumination,
+        color shading, semi-transparent smudges, and localized dust spots) across
+        a stack of frames captured with the same microscope and camera sensor.
+        """
+        if not images or len(images) < min_frames:
+            logger.info("Skipping sensor artifact correction (need at least %d frames, got %d).",
+                        min_frames, len(images) if images else 0)
+            return images
+
+        if any(im is None or im.ndim != 3 or im.shape[2] != 3 for im in images):
+            logger.warning("Skipping sensor artifact correction: invalid or non-BGR image found.")
+            return images
+
+        first_shape = images[0].shape
+        if any(im.shape != first_shape for im in images[1:]):
+            logger.warning("Skipping sensor artifact correction: input frames have differing shapes.")
+            return images
+
+        # Normalize each frame's global brightness before stacking so per-frame
+        # exposure shifts do not distort the stationary background estimate.
+        scales = [float(np.percentile(im, 85)) for im in images]
+        ref_scale = float(np.median(scales))
+        if ref_scale <= 1e-6:
+            return images
+
+        h, w, _ = first_shape
+        norm_frames = [
+            im.astype(np.float32) * (ref_scale / max(s, 1e-6))
+            for im, s in zip(images, scales)
+        ]
+
+        # Compute per-channel high percentile across frames to reject moving specimen
+        # while capturing stationary illumination gradients and dust shadows.
+        bg_est = np.empty((h, w, 3), dtype=np.float32)
+        for c in range(3):
+            channel_stack = np.stack([nf[:, :, c] for nf in norm_frames], axis=0)
+            bg_est[:, :, c] = np.percentile(channel_stack, percentile, axis=0)
+
+        dust_mask = cls._detect_stationary_dust_mask(
+            bg_est,
+            dust_ratio_thresh=dust_ratio_thresh,
+            max_dust_area_ratio=max_dust_area_ratio,
+        )
+
+        # Flat-field gain relative to global median background color/level,
+        # clamped to avoid amplifying noise in dark regions.
+        target_bg = np.median(bg_est, axis=(0, 1)).astype(np.float32)
+        gain_map = np.clip(target_bg / np.maximum(bg_est, 1.0), gain_min, gain_max)
+
+        has_dust = bool(dust_mask.any())
+        dust_pixels = int(np.count_nonzero(dust_mask)) if has_dust else 0
+        logger.info("Sensor artifact correction: %d frames (%dx%d), dust_pixels=%d",
+                    len(images), w, h, dust_pixels)
+
+        corrected = []
+        for nf in norm_frames:
+            corr = np.clip(nf * gain_map, 0, 255).astype(np.uint8)
+            if has_dust:
+                corr = cv2.inpaint(corr, dust_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+            corrected.append(corr)
+
+        return corrected
 
     @staticmethod
     def adjust_background_brightness(images, target_percentile=90):
@@ -562,6 +658,7 @@ class SimpleStitcher:
         if combined_mask is not None:
             unseen = (combined_mask == 0)
             result[unseen] = 0
+            self.last_coverage_mask = (combined_mask > 0).astype(np.uint8)
 
         # 5. Final Gradient Smoothing (Optional but helpful for large panoramas)
         # We can apply a very mild blurring to the transitions if needed, 
@@ -601,21 +698,22 @@ class SimpleStitcher:
                 canvas[overlap] = (canvas[overlap].astype(np.float32) * (1.0 - alpha) + warped[overlap].astype(
                     np.float32) * alpha).astype(np.uint8)
             acc_mask = ((acc_mask > 0) | (mask > 0)).astype(np.uint8)
+        self.last_coverage_mask = (acc_mask > 0).astype(np.uint8)
         return canvas
 
     @staticmethod
-    def _crop_black_borders(img, threshold=20, border=10):
+    def _crop_black_borders(img, threshold=20, border=10, return_box=False):
         if img is None:
-            return None
+            return (None, None) if return_box else None
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, thresh = cv2.threshold(gray, int(threshold), 255, cv2.THRESH_BINARY)
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            return img
+            return (img, (0, img.shape[0], 0, img.shape[1])) if return_box else img
 
         x, y, w, h = cv2.boundingRect(np.vstack(contours))
 
-        # Inward-trim by `border` pixels on each side
+        # Inward-trim by order pixels on each side
         x2 = int(max(0, x + border))
         y2 = int(max(0, y + border))
         x_end = int(min(img.shape[1], x + w - border))
@@ -623,9 +721,11 @@ class SimpleStitcher:
 
         # If trimming would produce an invalid box, fall back to the original bounding rect
         if x_end <= x2 or y_end <= y2:
-            return img[y:y + h, x:x + w]
+            box = (y, y + h, x, x + w)
+            return (img[y:y + h, x:x + w], box) if return_box else img[y:y + h, x:x + w]
 
-        return img[y2:y_end, x2:x_end]
+        box = (y2, y_end, x2, x_end)
+        return (img[y2:y_end, x2:x_end], box) if return_box else img[y2:y_end, x2:x_end]
 
     def stitch(self, filelist, img_loader=lambda p: cv2.imread(p, cv2.IMREAD_COLOR), assume_same_scale=True):
         """Enhanced stitching with multi-band blending and exposure compensation."""
@@ -637,6 +737,10 @@ class SimpleStitcher:
 
         # log matcher GPU usage at runtime
         logger.info("Matcher using CUDA: %s", bool(getattr(self.matcher, 'using_cuda', False)))
+
+        # remove stationary sensor/optics artifacts (illumination, shading, dust) before matching
+        if self.sensor_correction:
+            imgs = self.correct_sensor_artifacts(imgs)
 
         # apply optional pre-stitch equalization before matching
         if self.equalize:
@@ -693,7 +797,10 @@ class SimpleStitcher:
             pano = self._warp_images_to_canvas(imgs, Hs)
 
         if self.crop:
-            pano = self._crop_black_borders(pano)
+            pano, crop_box = self._crop_black_borders(pano, return_box=True)
+            if hasattr(self, 'last_coverage_mask') and self.last_coverage_mask is not None and crop_box is not None:
+                y2, y_end, x2, x_end = crop_box
+                self.last_coverage_mask = self.last_coverage_mask[y2:y_end, x2:x_end]
 
         # pano = self.auto_spread_brightness(pano)
         return pano

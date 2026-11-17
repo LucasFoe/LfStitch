@@ -408,7 +408,6 @@ def main():
         'img_dir': './img',
         'out_dir': './result',
         'final_megapix': 5.0,
-        'try_use_gpu': True,
         'confidence_threshold': 0.5,
         'output': 'output',
         'fixborder': True,
@@ -418,8 +417,7 @@ def main():
         'defringe': False,
         'vignette_correction': False,
         'local_contrast': False,
-        'denoise': False,
-        'sensor_correction': False
+        'denoise': False
     }
 
     # Get values from config file or use defaults
@@ -430,7 +428,6 @@ def main():
     out_dir = os.path.abspath(out_dir)
 
     final_megapix = config.getfloat('OPTIONS', 'final_megapix', fallback=default_options['final_megapix'])
-    try_use_gpu = config.getboolean('OPTIONS', 'try_use_gpu', fallback=default_options['try_use_gpu'])
     confidence_threshold = config.getfloat('OPTIONS', 'confidence_threshold', fallback=default_options['confidence_threshold'])
     outfile = config.get('OPTIONS', 'output', fallback=default_options['output'])
     fixborder = config.getboolean('OPTIONS', 'fixborder', fallback=default_options['fixborder'])
@@ -441,13 +438,11 @@ def main():
     vignette_correction = config.getboolean('OPTIONS', 'vignette_correction', fallback=default_options['vignette_correction'])
     local_contrast = config.getboolean('OPTIONS', 'local_contrast', fallback=default_options['local_contrast'])
     denoise = config.getboolean('OPTIONS', 'denoise', fallback=default_options['denoise'])
-    sensor_correction = config.getboolean('OPTIONS', 'sensor_correction', fallback=default_options['sensor_correction'])
 
     # Log the option values
     logger.info("Option img_dir: %s", img_dir)
     logger.info("Option out_dir: %s", out_dir)
     logger.info("Option final_megapix: %f", final_megapix)
-    logger.info("Option try_use_gpu: %s", try_use_gpu)
     logger.info("Option confidence_threshold: %f", confidence_threshold)
     logger.info("Option output: %s", outfile)
     logger.info("Option fixborder: %s", fixborder)
@@ -458,10 +453,15 @@ def main():
     logger.info("Option vignette_correction: %s", vignette_correction)
     logger.info("Option local_contrast: %s", local_contrast)
     logger.info("Option denoise: %s", denoise)
-    logger.info("Option sensor_correction: %s", sensor_correction)
 
     logger.info("Input Directory: %s", os.path.abspath(img_dir))
-    filelist = [os.path.join(img_dir, f) for f in sorted(os.listdir(img_dir), key=natural_sort_key)]
+    all_files = sorted(os.listdir(img_dir), key=natural_sort_key)
+    ref_pattern = re.compile(r'^w\d+\.(tif|tiff|jpg|jpeg|png|bmp)$', re.IGNORECASE)
+    ref_filelist = [os.path.join(img_dir, f) for f in all_files if ref_pattern.match(f)]
+    filelist = [os.path.join(img_dir, f) for f in all_files if not ref_pattern.match(f)]
+    if ref_filelist:
+        logger.info("Detected %d background reference frames (excluded from stitching): %s",
+                    len(ref_filelist), ref_filelist)
     logger.info("List of input files with full paths: %s", filelist)
 
     # map confidence_threshold -> min_inliers and instantiate SimpleStitcher with new args
@@ -474,12 +474,10 @@ def main():
         min_inliers=min_inliers,
         warper_type="plane",
         crop=True,
-        try_use_gpu=try_use_gpu,
         blender_type="multiband",
         exposure_compensation=True,
         equalize=True,
-        num_bands=5,
-        sensor_correction=sensor_correction
+        num_bands=5
     )
     # Pre-stitching corrections (Radial vignette correction)
     if vignette_correction:
@@ -490,9 +488,13 @@ def main():
         logger.info("Applying pre-stitch radial vignette correction on input tiles...")
         imgs = [apply_radial_vignette(im) for im in imgs]
 
-        output = stitcher.stitch(imgs, img_loader=lambda p: p if isinstance(p, np.ndarray) else cv2.imread(p, cv2.IMREAD_COLOR))
+        output = stitcher.stitch(
+            imgs,
+            img_loader=lambda p: p if isinstance(p, np.ndarray) else cv2.imread(p, cv2.IMREAD_COLOR),
+            reference_filelist=ref_filelist,
+        )
     else:
-        output = stitcher.stitch(filelist)
+        output = stitcher.stitch(filelist, reference_filelist=ref_filelist)
 
     if output is None:
         logger.error("Stitcher returned no output (None). Exiting.")

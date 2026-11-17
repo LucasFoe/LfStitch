@@ -4,19 +4,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Cache CUDA availability check so it is executed only once
-def _get_cuda_device_count_cached():
-    """Return cached CUDA device count to avoid repeated expensive checks."""
-    if not hasattr(_get_cuda_device_count_cached, "_cached_count"):
-        if hasattr(cv2, "cuda") and hasattr(cv2.cuda, "getCudaEnabledDeviceCount"):
-            try:
-                _get_cuda_device_count_cached._cached_count = cv2.cuda.getCudaEnabledDeviceCount()
-            except Exception:
-                _get_cuda_device_count_cached._cached_count = 0
-        else:
-            _get_cuda_device_count_cached._cached_count = 0
-    return _get_cuda_device_count_cached._cached_count
-
 class FeatureMatcher:
     """
     Feature matcher tuned for biological microscopy images.
@@ -29,7 +16,7 @@ class FeatureMatcher:
     """
 
     def __init__(self, detector='sift', ratio=0.85, ransac_thresh=3.0, min_inliers=8,
-                 do_clahe=False, denoise_ksize=1, min_spread_frac=0.0005, try_use_gpu=False):
+                 do_clahe=False, denoise_ksize=1, min_spread_frac=0.0005):
         self.detector_name = detector.lower()
         self.ratio = float(ratio)
         self.ransac_thresh = float(ransac_thresh)
@@ -38,31 +25,16 @@ class FeatureMatcher:
         self.denoise_ksize = int(denoise_ksize) if denoise_ksize is not None else 1
         self.min_spread_frac = float(min_spread_frac)
 
-        # runtime flag for whether a CUDA detector was actually created
-        self.using_cuda = False
-
-        # determine whether GPU should be attempted using cached device count
-        cuda_device_count = _get_cuda_device_count_cached()
-        self.try_use_gpu = bool(try_use_gpu) and cuda_device_count > 0
-
-        # log\-once flag for CUDA usage
-        self._logged_cuda = False
-
         # detector/matcher creation is handled by _create_detector_and_matcher
         self._create_detector_and_matcher()
 
     def _create_detector_and_matcher(self):
         if hasattr(cv2, 'SIFT_create') and self.detector_name == 'sift':
             try:
-                if self.try_use_gpu and hasattr(cv2, 'cuda') and hasattr(cv2.cuda, 'SIFT_create'):
-                    self.detector = cv2.cuda.SIFT_create(nfeatures=10000)
-                    self.using_cuda = True
-                    logger.info("Using CUDA SIFT detector.")
-                else:
-                    try:
-                        self.detector = cv2.SIFT_create(nfeatures=10000, contrastThreshold=0.01, edgeThreshold=5)
-                    except TypeError:
-                        self.detector = cv2.SIFT_create(nfeatures=10000)
+                try:
+                    self.detector = cv2.SIFT_create(nfeatures=10000, contrastThreshold=0.01, edgeThreshold=5)
+                except TypeError:
+                    self.detector = cv2.SIFT_create(nfeatures=10000)
                 index_params = dict(algorithm=1, trees=5)
                 search_params = dict(checks=50)
                 self.matcher = cv2.FlannBasedMatcher(index_params, search_params)
@@ -124,11 +96,6 @@ class FeatureMatcher:
         return mean_err if mean_err <= max_mean_err else float('inf')
 
     def detect_and_match(self, img1, img2):
-
-        if not self._logged_cuda:
-            logger.info("Detector using CUDA: %s", bool(getattr(self, 'using_cuda', False)))
-            self._logged_cuda = True
-
         gray1 = self._preprocess(img1)
         gray2 = self._preprocess(img2)
         kp1, des1 = self.detector.detectAndCompute(gray1, None)
@@ -197,11 +164,11 @@ class SimpleStitcher:
     """
 
     def __init__(self, detector='sift', ratio=0.75, ransac_thresh=4.0, min_inliers=30,
-                 warper_type='plane', crop=True, try_use_gpu=False, skip_reorder=True,
+                 warper_type='plane', crop=True, skip_reorder=True,
                  blender_type='multiband', exposure_compensation=False, num_bands=5,
-                 equalize=False, sensor_correction=False):
+                 equalize=False):
         self.matcher = FeatureMatcher(detector=detector, ratio=ratio, ransac_thresh=ransac_thresh,
-                                      min_inliers=min_inliers, try_use_gpu=try_use_gpu)
+                                      min_inliers=min_inliers)
         self.warper_type = (warper_type or 'plane').lower()
         self.crop = bool(crop)
         self.skip_reorder = bool(skip_reorder)
@@ -209,7 +176,6 @@ class SimpleStitcher:
         self.exposure_compensation = bool(exposure_compensation)
         self.num_bands = int(num_bands)
         self.equalize = bool(equalize)  # boolean flag for equalization
-        self.sensor_correction = bool(sensor_correction)
 
     @staticmethod
     def _cylindrical_warp(img, f=None):
@@ -265,26 +231,33 @@ class SimpleStitcher:
         return dust_mask
 
     @classmethod
-    def correct_sensor_artifacts(cls, images, percentile=85, min_frames=4,
-                                 dust_ratio_thresh=0.80, max_dust_area_ratio=0.005,
-                                 gain_min=0.5, gain_max=2.0):
+    def correct_stationary_artifacts(cls, images, reference_images=None, min_frames=2,
+                                     dust_ratio_thresh=0.80, max_dust_area_ratio=0.005,
+                                     gain_min=0.5, gain_max=2.0, smooth_sigma=1.5):
         """
-        Estimate and remove stationary sensor/optics artifacts (uneven illumination,
-        color shading, semi-transparent smudges, and localized dust spots) across
-        a stack of frames captured with the same microscope and camera sensor.
+        Estimate and remove stationary camera, optics, and illumination artifacts
+        (uneven illumination, vignetting, color shading, semi-transparent smudges,
+        and localized dust spots) using shifted reference background frames
+        (e.g. w1, w2, w3 captured outside the specimen).
+
+        If `reference_images` are not provided or invalid, correction is skipped.
         """
-        if not images or len(images) < min_frames:
-            logger.info("Skipping sensor artifact correction (need at least %d frames, got %d).",
-                        min_frames, len(images) if images else 0)
+        if not images or not reference_images:
             return images
 
         if any(im is None or im.ndim != 3 or im.shape[2] != 3 for im in images):
-            logger.warning("Skipping sensor artifact correction: invalid or non-BGR image found.")
+            logger.warning("Skipping stationary artifact correction: invalid or non-BGR image found.")
             return images
 
         first_shape = images[0].shape
         if any(im.shape != first_shape for im in images[1:]):
-            logger.warning("Skipping sensor artifact correction: input frames have differing shapes.")
+            logger.warning("Skipping stationary artifact correction: input frames have differing shapes.")
+            return images
+
+        if (len(reference_images) < min_frames
+                or any(im is None or im.ndim != 3 or im.shape != first_shape for im in reference_images)):
+            logger.info("Skipping stationary artifact correction: need at least %d matching %s reference frames.",
+                        min_frames, first_shape)
             return images
 
         # Normalize each frame's global brightness before stacking so per-frame
@@ -300,12 +273,19 @@ class SimpleStitcher:
             for im, s in zip(images, scales)
         ]
 
-        # Compute per-channel high percentile across frames to reject moving specimen
-        # while capturing stationary illumination gradients and dust shadows.
+        ref_scales = [float(np.percentile(im, 85)) for im in reference_images]
+        norm_refs = [
+            im.astype(np.float32) * (ref_scale / max(s, 1e-6))
+            for im, s in zip(reference_images, ref_scales)
+        ]
+
         bg_est = np.empty((h, w, 3), dtype=np.float32)
         for c in range(3):
-            channel_stack = np.stack([nf[:, :, c] for nf in norm_frames], axis=0)
-            bg_est[:, :, c] = np.percentile(channel_stack, percentile, axis=0)
+            ref_stack = np.stack([nr[:, :, c] for nr in norm_refs], axis=0)
+            if len(norm_refs) >= 3:
+                bg_est[:, :, c] = np.median(ref_stack, axis=0)
+            else:
+                bg_est[:, :, c] = np.max(ref_stack, axis=0)
 
         dust_mask = cls._detect_stationary_dust_mask(
             bg_est,
@@ -313,15 +293,21 @@ class SimpleStitcher:
             max_dust_area_ratio=max_dust_area_ratio,
         )
 
+        # Lightly smooth the reference background to suppress shot noise while preserving smudges
+        if smooth_sigma and smooth_sigma > 0:
+            bg_smooth = cv2.GaussianBlur(bg_est, (0, 0), sigmaX=float(smooth_sigma))
+        else:
+            bg_smooth = bg_est
+
         # Flat-field gain relative to global median background color/level,
         # clamped to avoid amplifying noise in dark regions.
-        target_bg = np.median(bg_est, axis=(0, 1)).astype(np.float32)
-        gain_map = np.clip(target_bg / np.maximum(bg_est, 1.0), gain_min, gain_max)
+        target_bg = np.median(bg_smooth, axis=(0, 1)).astype(np.float32)
+        gain_map = np.clip(target_bg / np.maximum(bg_smooth, 1.0), gain_min, gain_max)
 
         has_dust = bool(dust_mask.any())
         dust_pixels = int(np.count_nonzero(dust_mask)) if has_dust else 0
-        logger.info("Sensor artifact correction: %d frames (%dx%d), dust_pixels=%d",
-                    len(images), w, h, dust_pixels)
+        logger.info("Stationary artifact correction (%d reference frames, %dx%d): dust_pixels=%d",
+                    len(reference_images), w, h, dust_pixels)
 
         corrected = []
         for nf in norm_frames:
@@ -727,7 +713,8 @@ class SimpleStitcher:
         box = (y2, y_end, x2, x_end)
         return (img[y2:y_end, x2:x_end], box) if return_box else img[y2:y_end, x2:x_end]
 
-    def stitch(self, filelist, img_loader=lambda p: cv2.imread(p, cv2.IMREAD_COLOR), assume_same_scale=True):
+    def stitch(self, filelist, img_loader=lambda p: cv2.imread(p, cv2.IMREAD_COLOR),
+               assume_same_scale=True, reference_filelist=None):
         """Enhanced stitching with multi-band blending and exposure compensation."""
         if not filelist:
             return None
@@ -735,12 +722,10 @@ class SimpleStitcher:
         if any(im is None for im in imgs):
             raise ValueError("One or more images failed to load.")
 
-        # log matcher GPU usage at runtime
-        logger.info("Matcher using CUDA: %s", bool(getattr(self.matcher, 'using_cuda', False)))
-
-        # remove stationary sensor/optics artifacts (illumination, shading, dust) before matching
-        if self.sensor_correction:
-            imgs = self.correct_sensor_artifacts(imgs)
+        # remove stationary sensor, optics, and illumination artifacts when reference frames (w1, w2, w3...) are provided
+        if reference_filelist:
+            ref_imgs = [img_loader(p) for p in reference_filelist]
+            imgs = self.correct_stationary_artifacts(imgs, reference_images=ref_imgs)
 
         # apply optional pre-stitch equalization before matching
         if self.equalize:

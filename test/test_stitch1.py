@@ -21,7 +21,6 @@ class TestStitchingProgram(unittest.TestCase):
             config_file.write(f"img_dir = {self.img_dir}\n")
             config_file.write(f"out_dir = {self.out_dir}\n")
             config_file.write("final_megapix = 5\n")
-            config_file.write("try_use_gpu = False\n")
             config_file.write("confidence_threshold = 0.5\n")
             config_file.write("output = output\n")
             config_file.write("fixborder = True\n")

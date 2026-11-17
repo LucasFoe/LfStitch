@@ -50,9 +50,17 @@ class TestSensorCorrection(unittest.TestCase):
 
         return frames
 
-    def test_removes_stationary_dust_and_shading(self):
+    def test_removes_stationary_dust_and_shading_with_refs(self):
         frames = self._make_synthetic_stack(num_frames=8)
-        corrected = SimpleStitcher.correct_sensor_artifacts(frames)
+        # 3 near-empty reference frames (w1, w2, w3) sharing the same stationary field
+        h, w = frames[0].shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        illum = 1.0 - 0.30 * (((xx - w * 0.4) / w) ** 2 + ((yy - h * 0.5) / h) ** 2)
+        smudge = 1.0 - 0.18 * np.exp(-(((xx - 90) ** 2 + (yy - 80) ** 2) / (2 * 18.0 ** 2)))
+        dust = np.where(np.sqrt((xx - 220) ** 2 + (yy - 140) ** 2) <= 4.0, 0.15, 1.0).astype(np.float32)
+        stationary_field = (illum * smudge * dust)[:, :, None]
+        refs = [np.clip(np.full((h, w, 3), 220, dtype=np.float32) * stationary_field, 0, 255).astype(np.uint8) for _ in range(3)]
+        corrected = SimpleStitcher.correct_stationary_artifacts(frames, reference_images=refs)
 
         self.assertEqual(len(corrected), len(frames))
         for orig, corr in zip(frames, corrected):
@@ -80,19 +88,24 @@ class TestSensorCorrection(unittest.TestCase):
         self.assertLess(orig_dust_val, 80.0)
         self.assertGreater(corr_dust_val, 160.0)
 
-    def test_skips_when_too_few_frames_or_mismatched_shapes(self):
+    def test_skips_when_no_refs_or_mismatched_shapes(self):
         frames = self._make_synthetic_stack(num_frames=3)
-        out_few = SimpleStitcher.correct_sensor_artifacts(frames, min_frames=4)
-        self.assertEqual(len(out_few), 3)
-        for a, b in zip(frames, out_few):
+        out_none = SimpleStitcher.correct_stationary_artifacts(frames, reference_images=None)
+        self.assertEqual(len(out_none), 3)
+        for a, b in zip(frames, out_none):
             self.assertTrue(np.array_equal(a, b))
 
-        frames4 = self._make_synthetic_stack(num_frames=4)
-        frames4[2] = frames4[2][:100, :100]
-        out_mismatch = SimpleStitcher.correct_sensor_artifacts(frames4, min_frames=4)
-        self.assertEqual(out_mismatch[2].shape, (100, 100, 3))
+        out_few_refs = SimpleStitcher.correct_stationary_artifacts(frames, reference_images=frames[:1], min_frames=2)
+        for a, b in zip(frames, out_few_refs):
+            self.assertTrue(np.array_equal(a, b))
 
-    def test_stitcher_with_sensor_correction(self):
+        bad_refs = self._make_synthetic_stack(num_frames=3)
+        bad_refs[1] = bad_refs[1][:100, :100]
+        out_mismatch = SimpleStitcher.correct_stationary_artifacts(frames, reference_images=bad_refs)
+        for a, b in zip(frames, out_mismatch):
+            self.assertTrue(np.array_equal(a, b))
+
+    def test_stitcher_with_reference_filelist(self):
         frames = self._make_synthetic_stack(num_frames=6)
         stitcher_before = SimpleStitcher(
             detector='sift',
@@ -100,7 +113,6 @@ class TestSensorCorrection(unittest.TestCase):
             crop=True,
             exposure_compensation=True,
             equalize=False,
-            sensor_correction=False,
         )
         pano_before = stitcher_before.stitch(frames, img_loader=lambda x: x)
 
@@ -110,9 +122,8 @@ class TestSensorCorrection(unittest.TestCase):
             crop=True,
             exposure_compensation=True,
             equalize=False,
-            sensor_correction=True,
         )
-        pano = stitcher.stitch(frames, img_loader=lambda x: x)
+        pano = stitcher.stitch(frames, img_loader=lambda x: x, reference_filelist=frames)
         self.assertIsNotNone(pano)
         self.assertGreater(pano.shape[1], frames[0].shape[1])
 
@@ -120,22 +131,55 @@ class TestSensorCorrection(unittest.TestCase):
             cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_stitched_before.jpg'), pano_before)
         cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_stitched_after.jpg'), pano)
 
-    def test_real_img3_visual_output(self):
-        img3_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'testdata', 'img3'))
-        if not os.path.isdir(img3_dir):
-            self.skipTest("testdata/img3 not present")
-        files = sorted(f for f in os.listdir(img3_dir) if f.lower().endswith(('.tif', '.tiff', '.jpg', '.png')))
-        imgs = [cv2.imread(os.path.join(img3_dir, f), cv2.IMREAD_COLOR) for f in files]
-        corr = SimpleStitcher.correct_sensor_artifacts(imgs)
+    def test_real_img8_skips_without_refs(self):
+        img8_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'testdata', 'img8'))
+        if not os.path.isdir(img8_dir):
+            self.skipTest("testdata/img8 not present")
+        files = sorted(f for f in os.listdir(img8_dir) if f.lower().endswith(('.tif', '.tiff', '.jpg', '.png')))
+        imgs = [cv2.imread(os.path.join(img8_dir, f), cv2.IMREAD_COLOR) for f in files]
+        self.assertEqual(len(imgs), 2)
 
-        orig_bg = np.percentile(np.stack(imgs, axis=0), 85, axis=0)
-        corr_bg = np.percentile(np.stack(corr, axis=0), 85, axis=0)
+        corr = SimpleStitcher.correct_stationary_artifacts(imgs, reference_images=None)
+        for a, b in zip(imgs, corr):
+            self.assertTrue(np.array_equal(a, b))
 
-        cv2.imwrite(os.path.join(OUT_DIR, 'img3_frame0_before.jpg'), imgs[0])
-        cv2.imwrite(os.path.join(OUT_DIR, 'img3_frame0_after.jpg'), corr[0])
-        cv2.imwrite(os.path.join(OUT_DIR, 'img3_bg_before.jpg'), np.clip(orig_bg, 0, 255).astype(np.uint8))
-        cv2.imwrite(os.path.join(OUT_DIR, 'img3_bg_after.jpg'), np.clip(corr_bg, 0, 255).astype(np.uint8))
-        self.assertLess(np.std(corr_bg.mean(axis=2)), np.std(orig_bg.mean(axis=2)))
+    def test_reference_frames_reject_slide_particles(self):
+        h, w = 200, 260
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        illum = 1.0 - 0.30 * (((xx - w * 0.4) / w) ** 2 + ((yy - h * 0.5) / h) ** 2)
+        smudge = 1.0 - 0.18 * np.exp(-(((xx - 90) ** 2 + (yy - 80) ** 2) / (2 * 18.0 ** 2)))
+        dust = np.where(np.sqrt((xx - 180) ** 2 + (yy - 120) ** 2) <= 4.0, 0.15, 1.0).astype(np.float32)
+        stationary_field = (illum * smudge * dust)[:, :, None]
+
+        # 3 shifted almost-empty reference frames (w1, w2, w3), each with a stray slide particle at a different position
+        refs = []
+        stray_positions = [(50, 50), (130, 150), (210, 60)]
+        for sx, sy in stray_positions:
+            slide = np.full((h, w, 3), 220, dtype=np.float32)
+            cv2.circle(slide, (sx, sy), 6, (40, 40, 40), -1)
+            refs.append(np.clip(slide * stationary_field, 0, 255).astype(np.uint8))
+
+        # 2 specimen frames sharing the same stationary_field with non-overlapping specimen objects
+        specimen_frames = []
+        for cx in (60, 200):
+            slide = np.full((h, w, 3), 220, dtype=np.float32)
+            cv2.circle(slide, (cx, 100), 20, (70, 70, 70), -1)
+            specimen_frames.append(np.clip(slide * stationary_field, 0, 255).astype(np.uint8))
+
+        corrected = SimpleStitcher.correct_stationary_artifacts(specimen_frames, reference_images=refs)
+        self.assertEqual(len(corrected), 2)
+
+        orig_bg = np.max(np.stack(specimen_frames, axis=0), axis=0).mean(axis=2)
+        corr_bg = np.max(np.stack(corrected, axis=0), axis=0).mean(axis=2)
+
+        # Stationary dust at (180, 120) should be removed, and background std should drop > 50%
+        self.assertGreater(corr_bg[120, 180], 150.0)
+        self.assertLess(np.std(corr_bg), np.std(orig_bg) * 0.5)
+
+        # Stray slide particles in w1/w2/w3 should be rejected by median (not amplified into bright spots)
+        corrected_refs = SimpleStitcher.correct_stationary_artifacts(refs, reference_images=refs)
+        ref_bg = np.median(np.stack(corrected_refs, axis=0), axis=0).mean(axis=2)
+        self.assertLess(np.std(ref_bg), 10.0)
 
 
 if __name__ == '__main__':

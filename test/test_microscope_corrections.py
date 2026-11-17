@@ -96,7 +96,6 @@ class TestMicroscopeCorrections(unittest.TestCase):
 img_dir = ../testdata/img1
 out_dir = {self.out_dir}
 final_megapix = 2
-try_use_gpu = False
 confidence_threshold = 0.5
 output = output
 fixborder = True

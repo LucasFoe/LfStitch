@@ -18,9 +18,9 @@ LfStitch executes a structured, multi-phase pipeline where each step is applied 
 flowchart TD
     A["Input Image Tiles (img_dir)"] --> B{"Pre-Stitch:<br>vignette_correction?"}
     B -- True --> C["Radial Vignette Correction (per tile)"]
-    B -- False --> S{"sensor_correction?"}
+    B -- False --> S{"w1.*, w2.*, w3.*<br>in img_dir?"}
     C --> S
-    S -- True --> S1["Stationary Sensor & Dust Correction<br>(flat-field + dust inpainting)"]
+    S -- True --> S1["Stationary Artifact Correction<br>(using w* reference frames)"]
     S -- False --> D["Feature Matching & Homography (SIFT/ORB)"]
     S1 --> D
     D --> E["Exposure Compensation & Multi-Band Blending (Merge)"]
@@ -49,7 +49,7 @@ flowchart TD
    * **`vignette_correction`**: Optical lens vignetting (radial light fall-off) is concentric to the lens center of *each individual camera tile*. Correcting this *before* matching and blending prevents darker seams and circular tile patterns across the mosaic.
 
 2. **Phase 2: Core Stitching (`SimpleStitcher`)**
-   * **Stationary Sensor & Dust Correction (`sensor_correction = True`)**: When all input tiles are captured with the same microscope and camera sensor while the specimen moves, `SimpleStitcher.correct_sensor_artifacts()` estimates the stationary background across the frame stack (after per-frame exposure normalization) to remove uneven illumination, color shading, semi-transparent smudges, and localized opaque dust spots *before* feature matching.
+   * **Stationary Artifact Correction (Automatic via `w1.*`, `w2.*`, `w3.*`)**: If shifted blank/near-empty reference frames named `w1.*`, `w2.*`, `w3.*` (e.g., `w1.tif`, `w2.tif`, `w3.tif`) exist in `img_dir`, they are automatically excluded from stitching and passed to `SimpleStitcher.correct_stationary_artifacts()` to compute the stationary background via per-pixel median (rejecting stray slide particles) and remove uneven illumination, vignetting, color shading, smudges, and localized dust *before* feature matching. If no `w*.*` reference frames are present, this step is skipped.
    * **Background Equalization & Feature Matching**: SIFT or ORB detects feature keypoints and matches overlapping frames via RANSAC.
    * **Exposure Compensation**: Multiplicative gain estimation harmonizes exposure variations between tiles.
    * **Multi-Band Pyramid Blending**: Blends overlapping regions across spatial frequency bands to avoid visible seams.
@@ -89,7 +89,6 @@ LfStitch reads its settings from `stitch.ini` in the current working directory. 
 img_dir = ./img
 out_dir = ./result
 final_megapix = 5
-try_use_gpu = False
 confidence_threshold = 0.5
 output = output
 fixborder = True
@@ -100,7 +99,6 @@ correct_gradient = True
 bg_white_balance = False
 defringe = False
 vignette_correction = False
-sensor_correction = False
 local_contrast = False
 denoise = False
 ```
@@ -113,7 +111,6 @@ denoise = False
 | `out_dir` | string | `./result` | Directory where stitched results are saved. |
 | `output` | string | `output` | Base filename for the stitched outputs. |
 | `confidence_threshold` | float | `0.5` | Threshold for selecting image matches (determines minimum RANSAC inliers). |
-| `try_use_gpu` | boolean | `False` | Attempts CUDA/GPU acceleration when supported in OpenCV. |
 | `final_megapix` | float | `5.0` | Maximum resolution limit (in megapixels) for the output image. |
 | `detector` | string | `sift` | Feature detector algorithm (`sift`, `orb`, etc.). |
 | `fixborder` | boolean | `True` | Replaces unmapped black border regions with boundary-matched color (`*fixed.jpg`). |
@@ -121,7 +118,6 @@ denoise = False
 | `bg_white_balance` | boolean | `False` | Neutralizes microscope lamp color cast on the background. |
 | `defringe` | boolean | `False` | Suppresses chromatic aberration color fringing on high-contrast edges. |
 | `vignette_correction` | boolean | `False` | Corrects radial light fall-off (vignetting) on input tiles before stitching. |
-| `sensor_correction` | boolean | `False` | Estimates and removes stationary sensor/optics artifacts (uneven illumination, shading, smudges, and localized dust spots) across shifted frames before matching (requires at least 4 same-sized frames). |
 | `local_contrast` | boolean | `False` | Enhances micro-contrast and fine cellular details via CLAHE in LAB space. |
 | `denoise` | boolean | `False` | Applies edge-preserving bilateral denoising to reduce sensor noise. |
 

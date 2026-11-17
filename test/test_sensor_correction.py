@@ -8,7 +8,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from lfstitcher import SimpleStitcher
 
 
+OUT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'testdata', 'result_sensor_correction'))
+
+
 class TestSensorCorrection(unittest.TestCase):
+    def setUp(self):
+        os.makedirs(OUT_DIR, exist_ok=True)
+
     def _make_synthetic_stack(self, num_frames=8, h=240, w=320):
         """Create shifted textured frames with stationary vignetting, dust, and brightness shifts."""
         rng = np.random.default_rng(42)
@@ -54,15 +60,23 @@ class TestSensorCorrection(unittest.TestCase):
             self.assertEqual(corr.dtype, np.uint8)
 
         # Compare stationary background uniformity before vs after
-        orig_bg = np.percentile(np.stack(frames, axis=0), 85, axis=0).mean(axis=2)
-        corr_bg = np.percentile(np.stack(corrected, axis=0), 85, axis=0).mean(axis=2)
+        orig_bg = np.percentile(np.stack(frames, axis=0), 85, axis=0)
+        corr_bg = np.percentile(np.stack(corrected, axis=0), 85, axis=0)
+
+        cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_frame0_before.jpg'), frames[0])
+        cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_frame0_after.jpg'), corrected[0])
+        cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_bg_before.jpg'), np.clip(orig_bg, 0, 255).astype(np.uint8))
+        cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_bg_after.jpg'), np.clip(corr_bg, 0, 255).astype(np.uint8))
+
+        orig_bg_gray = orig_bg.mean(axis=2)
+        corr_bg_gray = corr_bg.mean(axis=2)
 
         # Standard deviation of background should drop significantly
-        self.assertLess(np.std(corr_bg), np.std(orig_bg) * 0.5)
+        self.assertLess(np.std(corr_bg_gray), np.std(orig_bg_gray) * 0.5)
 
         # Opaque dust spot at (x=220, y=140) should no longer be dark in the background estimate
-        orig_dust_val = orig_bg[140, 220]
-        corr_dust_val = corr_bg[140, 220]
+        orig_dust_val = orig_bg_gray[140, 220]
+        corr_dust_val = corr_bg_gray[140, 220]
         self.assertLess(orig_dust_val, 80.0)
         self.assertGreater(corr_dust_val, 160.0)
 
@@ -80,6 +94,16 @@ class TestSensorCorrection(unittest.TestCase):
 
     def test_stitcher_with_sensor_correction(self):
         frames = self._make_synthetic_stack(num_frames=6)
+        stitcher_before = SimpleStitcher(
+            detector='sift',
+            min_inliers=8,
+            crop=True,
+            exposure_compensation=True,
+            equalize=False,
+            sensor_correction=False,
+        )
+        pano_before = stitcher_before.stitch(frames, img_loader=lambda x: x)
+
         stitcher = SimpleStitcher(
             detector='sift',
             min_inliers=8,
@@ -91,6 +115,27 @@ class TestSensorCorrection(unittest.TestCase):
         pano = stitcher.stitch(frames, img_loader=lambda x: x)
         self.assertIsNotNone(pano)
         self.assertGreater(pano.shape[1], frames[0].shape[1])
+
+        if pano_before is not None:
+            cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_stitched_before.jpg'), pano_before)
+        cv2.imwrite(os.path.join(OUT_DIR, 'synthetic_stitched_after.jpg'), pano)
+
+    def test_real_img3_visual_output(self):
+        img3_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'testdata', 'img3'))
+        if not os.path.isdir(img3_dir):
+            self.skipTest("testdata/img3 not present")
+        files = sorted(f for f in os.listdir(img3_dir) if f.lower().endswith(('.tif', '.tiff', '.jpg', '.png')))
+        imgs = [cv2.imread(os.path.join(img3_dir, f), cv2.IMREAD_COLOR) for f in files]
+        corr = SimpleStitcher.correct_sensor_artifacts(imgs)
+
+        orig_bg = np.percentile(np.stack(imgs, axis=0), 85, axis=0)
+        corr_bg = np.percentile(np.stack(corr, axis=0), 85, axis=0)
+
+        cv2.imwrite(os.path.join(OUT_DIR, 'img3_frame0_before.jpg'), imgs[0])
+        cv2.imwrite(os.path.join(OUT_DIR, 'img3_frame0_after.jpg'), corr[0])
+        cv2.imwrite(os.path.join(OUT_DIR, 'img3_bg_before.jpg'), np.clip(orig_bg, 0, 255).astype(np.uint8))
+        cv2.imwrite(os.path.join(OUT_DIR, 'img3_bg_after.jpg'), np.clip(corr_bg, 0, 255).astype(np.uint8))
+        self.assertLess(np.std(corr_bg.mean(axis=2)), np.std(orig_bg.mean(axis=2)))
 
 
 if __name__ == '__main__':
